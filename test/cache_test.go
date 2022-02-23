@@ -23,9 +23,10 @@ func TestBatch(t *testing.T) {
 
 // 缓存使用内存测试
 func testMemory(t *testing.T) {
-	c := cache.NewMemo("yxh")
+	c := cache.NewMemo("prefix")
 	ctx := context.Background()
-	c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0, "demo01")
+	// tag can batch Management Cache
+	c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0, "tag01")
 	v := c.Get(ctx, "person")
 	fmt.Println(v)
 }
@@ -38,8 +39,9 @@ func testRedis(t *testing.T) {
 	}
 	ctx := context.Background()
 	gredis.SetConfig(&config)
-	c := cache.NewRedis("prefix001")
-	c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0, "demo01")
+	c := cache.NewRedis("prefix")
+	// tag can batch Management Cache
+	c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0, "tag01")
 	v := c.Get(ctx, "person")
 	fmt.Println(v)
 	c.Remove(ctx, "person")
