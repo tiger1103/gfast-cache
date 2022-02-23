@@ -10,6 +10,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"gfast-cache/adapter"
 	"github.com/gogf/gf/v2/crypto/gmd5"
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/frame/g"
@@ -20,16 +21,26 @@ import (
 	"time"
 )
 
-const (
-	CTypeMemo  = 1 // 内存
-	CTypeRedis = 2 // redis
-)
-
 type gfCache struct {
-	CType       int    //缓存类型
 	CachePrefix string //缓存前缀
 	cache       *gcache.Cache
-	tagSetMux   *sync.Mutex
+	tagSetMux   sync.Mutex
+}
+
+// NewMemo 使用内容缓存
+func NewMemo(cachePrefix string) *gfCache {
+	cache := &gfCache{
+		CachePrefix: cachePrefix,
+		cache:       gcache.New(),
+	}
+	return cache
+}
+
+// NewRedis 使用redis缓存
+func NewRedis(cachePrefix string) *gfCache {
+	cache := NewMemo(cachePrefix)
+	cache.cache.SetAdapter(adapter.NewRedis(g.Redis()))
+	return cache
 }
 
 //设置tag缓存的keys
