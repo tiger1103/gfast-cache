@@ -11,15 +11,26 @@ import (
 	"context"
 	"fmt"
 	"github.com/gogf/gf/v2/database/gredis"
-	"github.com/gogf/gf/v2/util/gconv"
+	"github.com/gogf/gf/v2/frame/g"
+	"github.com/tiger1103/gfast-cache/cache"
 	"testing"
 )
 
 func TestBatch(t *testing.T) {
+	//t.Run("testMemory", testMemory)
 	t.Run("testRedis", testRedis)
 }
 
-// redis测试
+// 缓存使用内存测试
+func testMemory(t *testing.T) {
+	c := cache.NewMemo("yxh")
+	ctx := context.Background()
+	c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0, "demo01")
+	v := c.Get(ctx, "person")
+	fmt.Println(v)
+}
+
+// 缓存使用redis测试
 func testRedis(t *testing.T) {
 	config := gredis.Config{
 		Address: "127.0.0.1:6379",
@@ -27,15 +38,10 @@ func testRedis(t *testing.T) {
 	}
 	ctx := context.Background()
 	gredis.SetConfig(&config)
-	redis := gredis.Instance()
-	defer redis.Close(ctx)
-	_, err := redis.Do(ctx, "SET", "k", "v")
-	if err != nil {
-		panic(err)
-	}
-	r, err := redis.Do(ctx, "GET", "k")
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(gconv.String(r))
+	c := cache.NewRedis("prefix001")
+	c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0, "demo01")
+	v := c.Get(ctx, "person")
+	fmt.Println(v)
+	c.Remove(ctx, "person")
+	c.RemoveByTag(ctx, "demo01")
 }

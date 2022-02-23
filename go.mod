@@ -1,4 +1,4 @@
-module gfast-cache
+module github.com/tiger1103/gfast-cache
 
 go 1.15
 

@@ -10,12 +10,12 @@ package cache
 import (
 	"context"
 	"fmt"
-	"gfast-cache/adapter"
 	"github.com/gogf/gf/v2/crypto/gmd5"
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gcache"
 	"github.com/gogf/gf/v2/util/gconv"
+	"github.com/tiger1103/gfast-cache/adapter"
 	"reflect"
 	"sync"
 	"time"
