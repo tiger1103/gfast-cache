@@ -104,7 +104,7 @@ func testRedisWithTag(t *testing.T) {
     }
     ctx := context.Background()
     gredis.SetConfig(&config)
-    c := cache.New("prefix")
+    c := cache.NewRedis("prefix")
     // tag can batch Management Cache
     
     c.Set(ctx, "person01", g.Map{"name": "zhangsan", "age": 10}, 0, "tag_person")

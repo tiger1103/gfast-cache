@@ -23,7 +23,7 @@ func TestBatch(t *testing.T) {
 
 // 缓存使用内存测试
 func testMemory(t *testing.T) {
-	c := cache.NewMemo("prefix")
+	c := cache.New("prefix")
 	ctx := context.Background()
 	// tag can batch Management Cache
 	c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0)
@@ -52,7 +52,7 @@ func testRedis(t *testing.T) {
 
 // 缓存标签使用内存测试
 func testMemoryWithTag(t *testing.T) {
-	c := cache.NewMemo("prefix")
+	c := cache.New("prefix")
 	ctx := context.Background()
 	// tag can batch Management Cache
 
