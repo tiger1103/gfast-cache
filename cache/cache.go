@@ -15,7 +15,6 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gcache"
 	"github.com/gogf/gf/v2/util/gconv"
-	"github.com/tiger1103/gfast-cache/adapter"
 	"reflect"
 	"sync"
 	"time"
@@ -27,8 +26,8 @@ type gfCache struct {
 	tagSetMux   sync.Mutex
 }
 
-// NewMemo 使用内容缓存
-func NewMemo(cachePrefix string) *gfCache {
+// New 使用内存缓存
+func New(cachePrefix string) *gfCache {
 	cache := &gfCache{
 		CachePrefix: cachePrefix,
 		cache:       gcache.New(),
@@ -38,8 +37,8 @@ func NewMemo(cachePrefix string) *gfCache {
 
 // NewRedis 使用redis缓存
 func NewRedis(cachePrefix string) *gfCache {
-	cache := NewMemo(cachePrefix)
-	cache.cache.SetAdapter(adapter.NewRedis(g.Redis()))
+	cache := New(cachePrefix)
+	cache.cache.SetAdapter(gcache.NewAdapterRedis(g.Redis()))
 	return cache
 }
 

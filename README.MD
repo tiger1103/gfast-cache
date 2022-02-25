@@ -25,7 +25,7 @@ import "github.com/tiger1103/gfast-cache"
 ```go
 // 缓存使用内存测试
 func testMemory(t *testing.T) {
-    c := cache.NewMemo("prefix")
+    c := cache.New("prefix")
     ctx := context.Background()
     // tag can batch Management Cache
     c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0, "tag01")
@@ -65,7 +65,7 @@ func testRedis(t *testing.T) {
 ```go
 // 缓存标签使用内存测试
 func testMemoryWithTag(t *testing.T) {
-    c := cache.NewMemo("prefix")
+    c := cache.New("prefix")
     ctx := context.Background()
     // tag can batch Management Cache
     
@@ -104,7 +104,7 @@ func testRedisWithTag(t *testing.T) {
     }
     ctx := context.Background()
     gredis.SetConfig(&config)
-    c := cache.NewRedis("prefix")
+    c := cache.New("prefix")
     // tag can batch Management Cache
     
     c.Set(ctx, "person01", g.Map{"name": "zhangsan", "age": 10}, 0, "tag_person")
