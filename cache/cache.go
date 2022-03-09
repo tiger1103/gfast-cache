@@ -20,15 +20,34 @@ import (
 	"time"
 )
 
-type gfCache struct {
+type IGCache interface {
+	Get(ctx context.Context, key interface{}) interface{}
+	Set(ctx context.Context, key interface{}, value interface{}, duration time.Duration, tag ...interface{})
+	Remove(ctx context.Context, key interface{}) interface{}
+	Removes(ctx context.Context, keys []interface{})
+	RemoveByTag(ctx context.Context, tag interface{})
+	RemoveByTags(ctx context.Context, tag []interface{})
+	SetIfNotExist(ctx context.Context, key interface{}, value interface{}, duration time.Duration, tag interface{}) bool
+	GetOrSet(ctx context.Context, key interface{}, value interface{}, duration time.Duration, tag interface{}) interface{}
+	GetOrSetFunc(ctx context.Context, key interface{}, f gcache.Func, duration time.Duration, tag interface{}) interface{}
+	GetOrSetFuncLock(ctx context.Context, key interface{}, f gcache.Func, duration time.Duration, tag interface{}) interface{}
+	Contains(ctx context.Context, key interface{}) bool
+	Data(ctx context.Context) map[interface{}]interface{}
+	Keys(ctx context.Context) []interface{}
+	KeyStrings(ctx context.Context) []string
+	Values(ctx context.Context) []interface{}
+	Size(ctx context.Context) int
+}
+
+type GfCache struct {
 	CachePrefix string //缓存前缀
 	cache       *gcache.Cache
 	tagSetMux   sync.Mutex
 }
 
 // New 使用内存缓存
-func New(cachePrefix string) *gfCache {
-	cache := &gfCache{
+func New(cachePrefix string) *GfCache {
+	cache := &GfCache{
 		CachePrefix: cachePrefix,
 		cache:       gcache.New(),
 	}
@@ -36,14 +55,14 @@ func New(cachePrefix string) *gfCache {
 }
 
 // NewRedis 使用redis缓存
-func NewRedis(cachePrefix string) *gfCache {
+func NewRedis(cachePrefix string) *GfCache {
 	cache := New(cachePrefix)
 	cache.cache.SetAdapter(gcache.NewAdapterRedis(g.Redis()))
 	return cache
 }
 
 //设置tag缓存的keys
-func (c *gfCache) cacheTagKey(ctx context.Context, key interface{}, tag interface{}) {
+func (c *GfCache) cacheTagKey(ctx context.Context, key interface{}, tag interface{}) {
 	tagKey := c.setTagKey(tag)
 	if tagKey != nil {
 		tagValue := []interface{}{key}
@@ -72,7 +91,7 @@ func (c *gfCache) cacheTagKey(ctx context.Context, key interface{}, tag interfac
 }
 
 //获取带标签的键名
-func (c *gfCache) setTagKey(tag interface{}) interface{} {
+func (c *GfCache) setTagKey(tag interface{}) interface{} {
 	if tag != nil {
 		return interface{}(fmt.Sprintf("%s_tag_%s", c.CachePrefix, gmd5.MustEncryptString(gconv.String(tag))))
 	}
@@ -81,7 +100,7 @@ func (c *gfCache) setTagKey(tag interface{}) interface{} {
 
 // Set sets cache with <tagKey>-<value> pair, which is expired after <duration>.
 // It does not expire if <duration> <= 0.
-func (c *gfCache) Set(ctx context.Context, key interface{}, value interface{}, duration time.Duration, tag ...interface{}) {
+func (c *GfCache) Set(ctx context.Context, key interface{}, value interface{}, duration time.Duration, tag ...interface{}) {
 	c.tagSetMux.Lock()
 	if len(tag) > 0 {
 		c.cacheTagKey(ctx, key, tag[0])
@@ -95,7 +114,7 @@ func (c *gfCache) Set(ctx context.Context, key interface{}, value interface{}, d
 
 // SetIfNotExist sets cache with <tagKey>-<value> pair if <tagKey> does not exist in the cache,
 // which is expired after <duration>. It does not expire if <duration> <= 0.
-func (c *gfCache) SetIfNotExist(ctx context.Context, key interface{}, value interface{}, duration time.Duration, tag interface{}) bool {
+func (c *GfCache) SetIfNotExist(ctx context.Context, key interface{}, value interface{}, duration time.Duration, tag interface{}) bool {
 	c.tagSetMux.Lock()
 	defer c.tagSetMux.Unlock()
 	c.cacheTagKey(ctx, key, tag)
@@ -105,7 +124,7 @@ func (c *gfCache) SetIfNotExist(ctx context.Context, key interface{}, value inte
 
 // Get returns the value of <tagKey>.
 // It returns nil if it does not exist or its value is nil.
-func (c *gfCache) Get(ctx context.Context, key interface{}) interface{} {
+func (c *GfCache) Get(ctx context.Context, key interface{}) interface{} {
 	v, err := c.cache.Get(ctx, key)
 	if err != nil {
 		g.Log().Error(ctx, err)
@@ -118,7 +137,7 @@ func (c *gfCache) Get(ctx context.Context, key interface{}) interface{} {
 // The tagKey-value pair expires after <duration>.
 //
 // It does not expire if <duration> <= 0.
-func (c *gfCache) GetOrSet(ctx context.Context, key interface{}, value interface{}, duration time.Duration, tag interface{}) interface{} {
+func (c *GfCache) GetOrSet(ctx context.Context, key interface{}, value interface{}, duration time.Duration, tag interface{}) interface{} {
 	c.tagSetMux.Lock()
 	defer c.tagSetMux.Unlock()
 	c.cacheTagKey(ctx, key, tag)
@@ -129,7 +148,7 @@ func (c *gfCache) GetOrSet(ctx context.Context, key interface{}, value interface
 // GetOrSetFunc returns the value of <tagKey>, or sets <tagKey> with result of function <f>
 // and returns its result if <tagKey> does not exist in the cache. The tagKey-value pair expires
 // after <duration>. It does not expire if <duration> <= 0.
-func (c *gfCache) GetOrSetFunc(ctx context.Context, key interface{}, f gcache.Func, duration time.Duration, tag interface{}) interface{} {
+func (c *GfCache) GetOrSetFunc(ctx context.Context, key interface{}, f gcache.Func, duration time.Duration, tag interface{}) interface{} {
 	c.tagSetMux.Lock()
 	defer c.tagSetMux.Unlock()
 	c.cacheTagKey(ctx, key, tag)
@@ -142,7 +161,7 @@ func (c *gfCache) GetOrSetFunc(ctx context.Context, key interface{}, f gcache.Fu
 // after <duration>. It does not expire if <duration> <= 0.
 //
 // Note that the function <f> is executed within writing mutex lock.
-func (c *gfCache) GetOrSetFuncLock(ctx context.Context, key interface{}, f gcache.Func, duration time.Duration, tag interface{}) interface{} {
+func (c *GfCache) GetOrSetFuncLock(ctx context.Context, key interface{}, f gcache.Func, duration time.Duration, tag interface{}) interface{} {
 	c.tagSetMux.Lock()
 	defer c.tagSetMux.Unlock()
 	c.cacheTagKey(ctx, key, tag)
@@ -151,24 +170,24 @@ func (c *gfCache) GetOrSetFuncLock(ctx context.Context, key interface{}, f gcach
 }
 
 // Contains returns true if <tagKey> exists in the cache, or else returns false.
-func (c *gfCache) Contains(ctx context.Context, key interface{}) bool {
+func (c *GfCache) Contains(ctx context.Context, key interface{}) bool {
 	v, _ := c.cache.Contains(ctx, key)
 	return v
 }
 
 // Remove deletes the <tagKey> in the cache, and returns its value.
-func (c *gfCache) Remove(ctx context.Context, key interface{}) interface{} {
+func (c *GfCache) Remove(ctx context.Context, key interface{}) interface{} {
 	v, _ := c.cache.Remove(ctx, key)
 	return v
 }
 
 // Removes deletes <keys> in the cache.
-func (c *gfCache) Removes(ctx context.Context, keys []interface{}) {
+func (c *GfCache) Removes(ctx context.Context, keys []interface{}) {
 	c.cache.Remove(ctx, keys...)
 }
 
 // RemoveByTag deletes the <tag> in the cache, and returns its value.
-func (c *gfCache) RemoveByTag(ctx context.Context, tag interface{}) {
+func (c *GfCache) RemoveByTag(ctx context.Context, tag interface{}) {
 	c.tagSetMux.Lock()
 	tagKey := c.setTagKey(tag)
 	//删除tagKey 对应的 key和值
@@ -193,38 +212,38 @@ func (c *gfCache) RemoveByTag(ctx context.Context, tag interface{}) {
 }
 
 // RemoveByTags deletes <tags> in the cache.
-func (c *gfCache) RemoveByTags(ctx context.Context, tag []interface{}) {
+func (c *GfCache) RemoveByTags(ctx context.Context, tag []interface{}) {
 	for _, v := range tag {
 		c.RemoveByTag(ctx, v)
 	}
 }
 
 // Data returns a copy of all tagKey-value pairs in the cache as map type.
-func (c *gfCache) Data(ctx context.Context) map[interface{}]interface{} {
+func (c *GfCache) Data(ctx context.Context) map[interface{}]interface{} {
 	v, _ := c.cache.Data(ctx)
 	return v
 }
 
 // Keys returns all keys in the cache as slice.
-func (c *gfCache) Keys(ctx context.Context) []interface{} {
+func (c *GfCache) Keys(ctx context.Context) []interface{} {
 	v, _ := c.cache.Keys(ctx)
 	return v
 }
 
 // KeyStrings returns all keys in the cache as string slice.
-func (c *gfCache) KeyStrings(ctx context.Context) []string {
+func (c *GfCache) KeyStrings(ctx context.Context) []string {
 	v, _ := c.cache.KeyStrings(ctx)
 	return v
 }
 
 // Values returns all values in the cache as slice.
-func (c *gfCache) Values(ctx context.Context) []interface{} {
+func (c *GfCache) Values(ctx context.Context) []interface{} {
 	v, _ := c.cache.Values(ctx)
 	return v
 }
 
 // Size returns the size of the cache.
-func (c *gfCache) Size(ctx context.Context) int {
+func (c *GfCache) Size(ctx context.Context) int {
 	v, _ := c.cache.Size(ctx)
 	return v
 }
