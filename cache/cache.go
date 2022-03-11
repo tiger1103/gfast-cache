@@ -10,7 +10,6 @@ package cache
 import (
 	"context"
 	"fmt"
-	"github.com/gogf/gf/v2/crypto/gmd5"
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gcache"
@@ -93,7 +92,7 @@ func (c *GfCache) cacheTagKey(ctx context.Context, key interface{}, tag interfac
 //获取带标签的键名
 func (c *GfCache) setTagKey(tag interface{}) interface{} {
 	if tag != nil {
-		return interface{}(fmt.Sprintf("%s_tag_%s", c.CachePrefix, gmd5.MustEncryptString(gconv.String(tag))))
+		return interface{}(fmt.Sprintf("%s_tag_%s", c.CachePrefix, tag))
 	}
 	return ""
 }
