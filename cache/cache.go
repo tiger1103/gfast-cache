@@ -21,17 +21,17 @@ import (
 )
 
 type IGCache interface {
-	Get(ctx context.Context, key interface{}) interface{}
-	Set(ctx context.Context, key interface{}, value interface{}, duration time.Duration, tag ...interface{})
-	Remove(ctx context.Context, key interface{}) interface{}
-	Removes(ctx context.Context, keys []interface{})
+	Get(ctx context.Context, key string) interface{}
+	Set(ctx context.Context, key string, value interface{}, duration time.Duration, tag ...interface{})
+	Remove(ctx context.Context, key string) interface{}
+	Removes(ctx context.Context, keys []string)
 	RemoveByTag(ctx context.Context, tag interface{})
 	RemoveByTags(ctx context.Context, tag []interface{})
-	SetIfNotExist(ctx context.Context, key interface{}, value interface{}, duration time.Duration, tag interface{}) bool
-	GetOrSet(ctx context.Context, key interface{}, value interface{}, duration time.Duration, tag interface{}) interface{}
-	GetOrSetFunc(ctx context.Context, key interface{}, f gcache.Func, duration time.Duration, tag interface{}) interface{}
-	GetOrSetFuncLock(ctx context.Context, key interface{}, f gcache.Func, duration time.Duration, tag interface{}) interface{}
-	Contains(ctx context.Context, key interface{}) bool
+	SetIfNotExist(ctx context.Context, key string, value interface{}, duration time.Duration, tag interface{}) bool
+	GetOrSet(ctx context.Context, key string, value interface{}, duration time.Duration, tag interface{}) interface{}
+	GetOrSetFunc(ctx context.Context, key string, f gcache.Func, duration time.Duration, tag interface{}) interface{}
+	GetOrSetFuncLock(ctx context.Context, key string, f gcache.Func, duration time.Duration, tag interface{}) interface{}
+	Contains(ctx context.Context, key string) bool
 	Data(ctx context.Context) map[interface{}]interface{}
 	Keys(ctx context.Context) []interface{}
 	KeyStrings(ctx context.Context) []string
