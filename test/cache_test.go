@@ -73,11 +73,11 @@ func testMemoryWithTag(t *testing.T) {
 	c.Remove(ctx, "person01")
 	c.Remove(ctx, "person02")
 	//或
-	c.Removes(ctx, []interface{}{"person01", "person02"})
+	c.Removes(ctx, []string{"person01", "person02"})
 	// 使用缓存标签
 	c.RemoveByTag(ctx, "tag_person") //直接就可以删除该标签下的缓存("person01","person02")
 	// 甚至可以批量删除标签
-	c.RemoveByTags(ctx, []interface{}{"tag_person", "tag_family"}) // 同时删除多组标签下的数据
+	c.RemoveByTags(ctx, []string{"tag_person", "tag_family"}) // 同时删除多组标签下的数据
 }
 
 // 缓存使用redis测试
@@ -108,9 +108,9 @@ func testRedisWithTag(t *testing.T) {
 	c.Remove(ctx, "person01")
 	c.Remove(ctx, "person02")
 	//或
-	c.Removes(ctx, []interface{}{"person01", "person02"})
+	c.Removes(ctx, []string{"person01", "person02"})
 	// 使用缓存标签
 	c.RemoveByTag(ctx, "tag_person") //直接就可以删除该标签下的缓存("person01","person02")
 	// 甚至可以批量删除标签
-	c.RemoveByTags(ctx, []interface{}{"tag_person", "tag_family"}) // 同时删除多组标签下的数据
+	c.RemoveByTags(ctx, []string{"tag_person", "tag_family"}) // 同时删除多组标签下的数据
 }
