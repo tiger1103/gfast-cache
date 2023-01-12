@@ -60,7 +60,7 @@ func NewRedis(cachePrefix string) *GfCache {
 	return cache
 }
 
-//设置tag缓存的keys
+// 设置tag缓存的keys
 func (c *GfCache) cacheTagKey(ctx context.Context, key interface{}, tag string) {
 	tagKey := c.CachePrefix + c.setTagKey(tag)
 	if tagKey != "" {
@@ -89,7 +89,7 @@ func (c *GfCache) cacheTagKey(ctx context.Context, key interface{}, tag string) 
 	}
 }
 
-//获取带标签的键名
+// 获取带标签的键名
 func (c *GfCache) setTagKey(tag string) string {
 	if tag != "" {
 		tag = "tag_" + tag
