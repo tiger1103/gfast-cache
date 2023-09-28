@@ -18,8 +18,10 @@ import (
 )
 
 func TestBatch(t *testing.T) {
-	//t.Run("testMemory", testMemory)
+	t.Run("testMemory", testMemory)
 	t.Run("testRedis", testRedis)
+	t.Run("testMemoryWithTag", testMemoryWithTag)
+	t.Run("testRedisWithTag", testRedisWithTag)
 }
 
 // 缓存使用内存测试
