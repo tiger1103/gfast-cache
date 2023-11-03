@@ -9,11 +9,13 @@ package cache
 
 import (
 	"context"
+	"fmt"
 	"github.com/gogf/gf/v2/container/gvar"
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gcache"
 	"github.com/gogf/gf/v2/util/gconv"
+	"github.com/tiger1103/gfast-cache/instance"
 	"reflect"
 	"sync"
 	"time"
@@ -46,11 +48,15 @@ type GfCache struct {
 
 // New 使用内存缓存
 func New(cachePrefix string) *GfCache {
-	cache := &GfCache{
-		CachePrefix: cachePrefix,
-		cache:       gcache.New(),
-	}
-	return cache
+	instanceKey := fmt.Sprintf("%s.%s", cachePrefix, cachePrefix)
+	cache := instance.GetOrSetFuncLock(instanceKey, func() interface{} {
+		cache := &GfCache{
+			CachePrefix: cachePrefix,
+			cache:       gcache.New(),
+		}
+		return cache
+	})
+	return cache.(*GfCache)
 }
 
 // NewRedis 使用redis缓存
