@@ -48,7 +48,7 @@ type GfCache struct {
 
 // New 使用内存缓存
 func New(cachePrefix string) *GfCache {
-	instanceKey := fmt.Sprintf("%s.%s", cachePrefix, cachePrefix)
+	instanceKey := fmt.Sprintf("%s.%s", cachePrefix, "default")
 	cache := instance.GetOrSetFuncLock(instanceKey, func() interface{} {
 		cache := &GfCache{
 			CachePrefix: cachePrefix,
@@ -61,9 +61,15 @@ func New(cachePrefix string) *GfCache {
 
 // NewRedis 使用redis缓存
 func NewRedis(cachePrefix string) *GfCache {
-	cache := New(cachePrefix)
-	cache.cache.SetAdapter(gcache.NewAdapterRedis(g.Redis()))
-	return cache
+	instanceKey := fmt.Sprintf("%s.%s", cachePrefix, "adapterRedis")
+	cache := instance.GetOrSetFuncLock(instanceKey, func() interface{} {
+		cache := &GfCache{
+			CachePrefix: cachePrefix,
+			cache:       gcache.NewWithAdapter(gcache.NewAdapterRedis(g.Redis())),
+		}
+		return cache
+	})
+	return cache.(*GfCache)
 }
 
 // 设置tag缓存的keys
