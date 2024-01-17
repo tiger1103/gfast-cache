@@ -15,6 +15,7 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gcache"
 	"github.com/gogf/gf/v2/util/gconv"
+	"github.com/tiger1103/gfast-cache/adapter"
 	"github.com/tiger1103/gfast-cache/instance"
 	"reflect"
 	"sync"
@@ -66,6 +67,18 @@ func NewRedis(cachePrefix string) *GfCache {
 		cache := &GfCache{
 			CachePrefix: cachePrefix,
 			cache:       gcache.NewWithAdapter(gcache.NewAdapterRedis(g.Redis())),
+		}
+		return cache
+	})
+	return cache.(*GfCache)
+}
+
+func NewDist(cachePrefix ...string) *GfCache {
+	instanceKey := fmt.Sprintf("%s.%s", cachePrefix, "adapterDist")
+	cache := instance.GetOrSetFuncLock(instanceKey, func() interface{} {
+		cache := &GfCache{
+			CachePrefix: cachePrefix[0],
+			cache:       gcache.NewWithAdapter(adapter.NewDist()),
 		}
 		return cache
 	})
