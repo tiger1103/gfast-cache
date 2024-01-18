@@ -13,11 +13,9 @@ import (
 	_ "github.com/gogf/gf/contrib/nosql/redis/v2"
 	"github.com/gogf/gf/v2/database/gredis"
 	"github.com/gogf/gf/v2/frame/g"
-	"github.com/gogf/gf/v2/util/gconv"
 	"github.com/tiger1103/gfast-cache/adapter"
 	"github.com/tiger1103/gfast-cache/cache"
 	"testing"
-	"time"
 )
 
 func TestBatch(t *testing.T) {
@@ -78,20 +76,41 @@ func testDist(t *testing.T) {
 }
 
 func testDistData(t *testing.T) {
+	type A struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+	a := &A{
+		Name: "张三",
+		Age:  30,
+	}
 	config := adapter.Config{
 		Dir: "./distDb",
 	}
 	ctx := context.Background()
 	adapter.SetConfig(&config)
 	c := cache.NewDist("prefix")
-	c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0)
-	c.Set(ctx, "YXH", "我明天去", 0)
-	c.Set(ctx, "woooooooooooooo", "chinaaaaaaaaaaaaaaaa", 10*time.Second)
+	//c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0)
+	//c.Set(ctx, "YXH", "我明天去", 0)
+	c.Set(ctx, "aaa", a, 0)
+	c.Set(ctx, "bbb", true, 0)
+	//c.Set(ctx, "woooooooooooooo", "chinaaaaaaaaaaaaaaaa", 10*time.Second)
 	fmt.Printf("数据库中有%d个元素\n", c.Size(ctx))
-	mp := c.Data(ctx)
+	ccc := c.Get(ctx, "aaa")
+
+	fmt.Println("ccccccccccccccc", ccc)
+	fmt.Println("bbbbbbbbbbbbbb", c.Get(ctx, "bbb"))
+
+	var b *A
+	err := ccc.Struct(&b)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("获取到的AAAAAAAAAAAA", b.Name, b.Age)
+	/*mp := c.Data(ctx)
 	for k, v := range mp {
 		fmt.Printf("得到的结果：%s----%s\n", gconv.String(k), gconv.String(v))
-	}
+	}*/
 	/*keys := c.Keys(ctx)
 	for _, v := range keys {
 		fmt.Println("key:", gconv.String(v))

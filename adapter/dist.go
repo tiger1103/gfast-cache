@@ -18,6 +18,7 @@ import (
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/gogf/gf/v2/util/gconv"
 	"github.com/tiger1103/gfast-cache/instance"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -51,7 +52,6 @@ func SetConfig(config *Config, name ...string) {
 		group = name[0]
 	}
 	localConfigMap.Set(group, config)
-
 	g.Log().Printf(context.TODO(), `SetConfig for group "%s": %+v`, group, config)
 }
 
@@ -78,7 +78,11 @@ func New(name ...string) *Dist {
 		} else {
 			panic(`missing configuration for distCache:"config not set"`)
 		}
-		db, err := badger.Open(badger.DefaultOptions(config.Dir))
+		option := badger.DefaultOptions(config.Dir).
+			WithValueLogFileSize(100 << 20).
+			WithMemTableSize(50 << 20).
+			WithValueThreshold(512 << 10)
+		db, err := badger.Open(option)
 		if err != nil {
 			panic(fmt.Sprintf(`loading dis db wrong:"%+v"`, err))
 		}
@@ -108,10 +112,13 @@ func (d *Dist) Set(ctx context.Context, key interface{}, value interface{}, dura
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	duration = d.getInternalExpire(duration)
-	err := d.db.Update(func(txn *badger.Txn) error {
+	err := d.db.Update(func(txn *badger.Txn) (err error) {
+		value, err = d.convertOptionToArgs(value)
+		if err != nil {
+			return
+		}
 		e := badger.NewEntry(gconv.Bytes(key), gconv.Bytes(value)).WithTTL(duration)
-		err := txn.SetEntry(e)
-		return err
+		return txn.SetEntry(e)
 	})
 	return err
 }
@@ -169,14 +176,17 @@ func (d *Dist) SetIfNotExistFuncLock(ctx context.Context, key interface{}, f gca
 
 func (d *Dist) Get(ctx context.Context, key interface{}) (value *gvar.Var, err error) {
 	err = d.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(gconv.Bytes(key))
-		if err != nil {
-			return err
-		}
-		err = item.Value(func(val []byte) error {
-			value = gvar.New(val)
+		item, e := txn.Get(gconv.Bytes(key))
+		if e != nil {
+			g.Log().Error(ctx, e)
 			return nil
-		})
+		}
+		if item != nil {
+			err = item.Value(func(val []byte) error {
+				value = gvar.New(val)
+				return nil
+			})
+		}
 		return err
 	})
 	return
@@ -205,8 +215,6 @@ func (d *Dist) GetOrSetFunc(ctx context.Context, key interface{}, f gcache.Func,
 }
 
 func (d *Dist) GetOrSetFuncLock(ctx context.Context, key interface{}, f gcache.Func, duration time.Duration) (result *gvar.Var, err error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	return d.GetOrSetFunc(ctx, key, f, duration)
 }
 
@@ -389,4 +397,29 @@ func (d *Dist) getInternalExpire(duration time.Duration) time.Duration {
 		return defaultMaxExpire * time.Millisecond
 	}
 	return duration
+}
+
+func (d *Dist) convertOptionToArgs(option interface{}) (result interface{}, err error) {
+	if option == nil {
+		return nil, nil
+	}
+	switch reflect.TypeOf(option).Kind() {
+	case reflect.Ptr, reflect.Struct:
+		result = gconv.Map(option)
+	case reflect.Bool:
+		result = gconv.String(option)
+	case reflect.Slice, reflect.Array:
+		optionSlice := gconv.SliceAny(option)
+		var newOption = make(g.SliceAny, len(optionSlice))
+		for k, v := range optionSlice {
+			newOption[k], err = d.convertOptionToArgs(v)
+			if err != nil {
+				return
+			}
+		}
+		option = newOption
+	default:
+		result = option
+	}
+	return
 }
