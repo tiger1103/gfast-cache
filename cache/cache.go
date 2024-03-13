@@ -25,14 +25,14 @@ import (
 type IGCache interface {
 	Get(ctx context.Context, key string) *gvar.Var
 	Set(ctx context.Context, key string, value interface{}, duration time.Duration, tag ...string)
-	Remove(ctx context.Context, key string) interface{}
+	Remove(ctx context.Context, key string) *gvar.Var
 	Removes(ctx context.Context, keys []string)
 	RemoveByTag(ctx context.Context, tag string)
 	RemoveByTags(ctx context.Context, tag []string)
 	SetIfNotExist(ctx context.Context, key string, value interface{}, duration time.Duration, tag string) bool
-	GetOrSet(ctx context.Context, key string, value interface{}, duration time.Duration, tag string) interface{}
-	GetOrSetFunc(ctx context.Context, key string, f gcache.Func, duration time.Duration, tag string) interface{}
-	GetOrSetFuncLock(ctx context.Context, key string, f gcache.Func, duration time.Duration, tag string) interface{}
+	GetOrSet(ctx context.Context, key string, value interface{}, duration time.Duration, tag string) *gvar.Var
+	GetOrSetFunc(ctx context.Context, key string, f gcache.Func, duration time.Duration, tag string) *gvar.Var
+	GetOrSetFuncLock(ctx context.Context, key string, f gcache.Func, duration time.Duration, tag string) *gvar.Var
 	Contains(ctx context.Context, key string) bool
 	Data(ctx context.Context) map[interface{}]interface{}
 	Keys(ctx context.Context) []interface{}
@@ -161,7 +161,7 @@ func (c *GfCache) Get(ctx context.Context, key string) *gvar.Var {
 // The tagKey-value pair expires after <duration>.
 //
 // It does not expire if <duration> <= 0.
-func (c *GfCache) GetOrSet(ctx context.Context, key string, value interface{}, duration time.Duration, tag string) interface{} {
+func (c *GfCache) GetOrSet(ctx context.Context, key string, value interface{}, duration time.Duration, tag string) *gvar.Var {
 	c.tagSetMux.Lock()
 	defer c.tagSetMux.Unlock()
 	c.cacheTagKey(ctx, key, tag)
@@ -172,7 +172,7 @@ func (c *GfCache) GetOrSet(ctx context.Context, key string, value interface{}, d
 // GetOrSetFunc returns the value of <tagKey>, or sets <tagKey> with result of function <f>
 // and returns its result if <tagKey> does not exist in the cache. The tagKey-value pair expires
 // after <duration>. It does not expire if <duration> <= 0.
-func (c *GfCache) GetOrSetFunc(ctx context.Context, key string, f gcache.Func, duration time.Duration, tag string) interface{} {
+func (c *GfCache) GetOrSetFunc(ctx context.Context, key string, f gcache.Func, duration time.Duration, tag string) *gvar.Var {
 	c.tagSetMux.Lock()
 	defer c.tagSetMux.Unlock()
 	c.cacheTagKey(ctx, key, tag)
@@ -185,7 +185,7 @@ func (c *GfCache) GetOrSetFunc(ctx context.Context, key string, f gcache.Func, d
 // after <duration>. It does not expire if <duration> <= 0.
 //
 // Note that the function <f> is executed within writing mutex lock.
-func (c *GfCache) GetOrSetFuncLock(ctx context.Context, key string, f gcache.Func, duration time.Duration, tag string) interface{} {
+func (c *GfCache) GetOrSetFuncLock(ctx context.Context, key string, f gcache.Func, duration time.Duration, tag string) *gvar.Var {
 	c.tagSetMux.Lock()
 	defer c.tagSetMux.Unlock()
 	c.cacheTagKey(ctx, key, tag)
@@ -200,7 +200,7 @@ func (c *GfCache) Contains(ctx context.Context, key string) bool {
 }
 
 // Remove deletes the <tagKey> in the cache, and returns its value.
-func (c *GfCache) Remove(ctx context.Context, key string) interface{} {
+func (c *GfCache) Remove(ctx context.Context, key string) *gvar.Var {
 	v, _ := c.cache.Remove(ctx, c.CachePrefix+key)
 	return v
 }
