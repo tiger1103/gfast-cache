@@ -61,12 +61,12 @@ func New(cachePrefix string) *GfCache {
 }
 
 // NewRedis 使用redis缓存
-func NewRedis(cachePrefix string) *GfCache {
+func NewRedis(cachePrefix string, redisName ...string) *GfCache {
 	instanceKey := fmt.Sprintf("%s.%s", cachePrefix, "adapterRedis")
 	cache := instance.GetOrSetFuncLock(instanceKey, func() interface{} {
 		cache := &GfCache{
 			CachePrefix: cachePrefix,
-			cache:       gcache.NewWithAdapter(gcache.NewAdapterRedis(g.Redis())),
+			cache:       gcache.NewWithAdapter(gcache.NewAdapterRedis(g.Redis(redisName...))),
 		}
 		return cache
 	})
