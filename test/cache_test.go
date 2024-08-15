@@ -20,9 +20,9 @@ import (
 
 func TestBatch(t *testing.T) {
 	//t.Run("testMemory", testMemory)
-	//t.Run("testRedis", testRedis)
+	t.Run("testRedis", testRedis)
 	//t.Run("testDist", testDist)
-	t.Run("testDistData", testDistData)
+	//t.Run("testDistData", testDistData)
 	//t.Run("testMemoryWithTag", testMemoryWithTag)
 	//t.Run("testRedisWithTag", testRedisWithTag)
 	//t.Run("testDistWithTag", testDistWithTag)
