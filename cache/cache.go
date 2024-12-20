@@ -91,7 +91,7 @@ func (c *GfCache) cacheTagKey(ctx context.Context, key interface{}, tag string) 
 	if tagKey != "" {
 		tagValue := []interface{}{key}
 		value, _ := c.cache.Get(ctx, tagKey)
-		if value != nil {
+		if !value.IsNil() {
 			var keyValue []interface{}
 			//若是字符串
 			if kStr, ok := value.Val().(string); ok {
