@@ -10,6 +10,10 @@ package cache
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sync"
+	"time"
+
 	"github.com/gogf/gf/v2/container/gvar"
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/frame/g"
@@ -17,9 +21,6 @@ import (
 	"github.com/gogf/gf/v2/util/gconv"
 	"github.com/tiger1103/gfast-cache/adapter"
 	"github.com/tiger1103/gfast-cache/instance"
-	"reflect"
-	"sync"
-	"time"
 )
 
 type IGCache interface {
@@ -217,6 +218,7 @@ func (c *GfCache) Removes(ctx context.Context, keys []string) {
 // RemoveByTag deletes the <tag> in the cache, and returns its value.
 func (c *GfCache) RemoveByTag(ctx context.Context, tag string) {
 	c.tagSetMux.Lock()
+	defer c.tagSetMux.Unlock()
 	tagKey := c.setTagKey(tag)
 	//删除tagKey 对应的 key和值
 	keys := c.Get(ctx, tagKey)
@@ -236,7 +238,6 @@ func (c *GfCache) RemoveByTag(ctx context.Context, tag string) {
 		}
 	}
 	c.Remove(ctx, tagKey)
-	c.tagSetMux.Unlock()
 }
 
 // RemoveByTags deletes <tags> in the cache.
