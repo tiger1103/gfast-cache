@@ -45,7 +45,7 @@ type IGCache interface {
 type GfCache struct {
 	CachePrefix string //缓存前缀
 	cache       *gcache.Cache
-	tagSetMux   sync.Mutex
+	tagLocks    [128]sync.Mutex
 }
 
 // New 使用内存缓存
@@ -84,6 +84,15 @@ func NewDist(cachePrefix ...string) *GfCache {
 		return cache
 	})
 	return cache.(*GfCache)
+}
+
+// getTagLock returns the mutex for the given tag
+func (c *GfCache) getTagLock(tag string) *sync.Mutex {
+	var hash uint32
+	for i := 0; i < len(tag); i++ {
+		hash = hash*31 + uint32(tag[i])
+	}
+	return &c.tagLocks[hash%128]
 }
 
 // 设置tag缓存的keys
@@ -126,23 +135,27 @@ func (c *GfCache) setTagKey(tag string) string {
 // Set sets cache with <tagKey>-<value> pair, which is expired after <duration>.
 // It does not expire if <duration> <= 0.
 func (c *GfCache) Set(ctx context.Context, key string, value interface{}, duration time.Duration, tag ...string) {
-	c.tagSetMux.Lock()
-	if len(tag) > 0 {
+	if len(tag) > 0 && tag[0] != "" {
+		mu := c.getTagLock(tag[0])
+		mu.Lock()
 		c.cacheTagKey(ctx, key, tag[0])
+		mu.Unlock()
 	}
 	err := c.cache.Set(ctx, c.CachePrefix+key, value, duration)
 	if err != nil {
 		g.Log().Error(ctx, err)
 	}
-	c.tagSetMux.Unlock()
 }
 
 // SetIfNotExist sets cache with <tagKey>-<value> pair if <tagKey> does not exist in the cache,
 // which is expired after <duration>. It does not expire if <duration> <= 0.
 func (c *GfCache) SetIfNotExist(ctx context.Context, key string, value interface{}, duration time.Duration, tag string) bool {
-	c.tagSetMux.Lock()
-	defer c.tagSetMux.Unlock()
-	c.cacheTagKey(ctx, key, tag)
+	if tag != "" {
+		mu := c.getTagLock(tag)
+		mu.Lock()
+		c.cacheTagKey(ctx, key, tag)
+		mu.Unlock()
+	}
 	v, _ := c.cache.SetIfNotExist(ctx, c.CachePrefix+key, value, duration)
 	return v
 }
@@ -163,9 +176,12 @@ func (c *GfCache) Get(ctx context.Context, key string) *gvar.Var {
 //
 // It does not expire if <duration> <= 0.
 func (c *GfCache) GetOrSet(ctx context.Context, key string, value interface{}, duration time.Duration, tag string) *gvar.Var {
-	c.tagSetMux.Lock()
-	defer c.tagSetMux.Unlock()
-	c.cacheTagKey(ctx, key, tag)
+	if tag != "" {
+		mu := c.getTagLock(tag)
+		mu.Lock()
+		c.cacheTagKey(ctx, key, tag)
+		mu.Unlock()
+	}
 	v, _ := c.cache.GetOrSet(ctx, c.CachePrefix+key, value, duration)
 	return v
 }
@@ -174,9 +190,12 @@ func (c *GfCache) GetOrSet(ctx context.Context, key string, value interface{}, d
 // and returns its result if <tagKey> does not exist in the cache. The tagKey-value pair expires
 // after <duration>. It does not expire if <duration> <= 0.
 func (c *GfCache) GetOrSetFunc(ctx context.Context, key string, f gcache.Func, duration time.Duration, tag string) *gvar.Var {
-	c.tagSetMux.Lock()
-	defer c.tagSetMux.Unlock()
-	c.cacheTagKey(ctx, key, tag)
+	if tag != "" {
+		mu := c.getTagLock(tag)
+		mu.Lock()
+		c.cacheTagKey(ctx, key, tag)
+		mu.Unlock()
+	}
 	v, _ := c.cache.GetOrSetFunc(ctx, c.CachePrefix+key, f, duration)
 	return v
 }
@@ -187,9 +206,12 @@ func (c *GfCache) GetOrSetFunc(ctx context.Context, key string, f gcache.Func, d
 //
 // Note that the function <f> is executed within writing mutex lock.
 func (c *GfCache) GetOrSetFuncLock(ctx context.Context, key string, f gcache.Func, duration time.Duration, tag string) *gvar.Var {
-	c.tagSetMux.Lock()
-	defer c.tagSetMux.Unlock()
-	c.cacheTagKey(ctx, key, tag)
+	if tag != "" {
+		mu := c.getTagLock(tag)
+		mu.Lock()
+		c.cacheTagKey(ctx, key, tag)
+		mu.Unlock()
+	}
 	v, _ := c.cache.GetOrSetFuncLock(ctx, c.CachePrefix+key, f, duration)
 	return v
 }
@@ -217,8 +239,9 @@ func (c *GfCache) Removes(ctx context.Context, keys []string) {
 
 // RemoveByTag deletes the <tag> in the cache, and returns its value.
 func (c *GfCache) RemoveByTag(ctx context.Context, tag string) {
-	c.tagSetMux.Lock()
-	defer c.tagSetMux.Unlock()
+	mu := c.getTagLock(tag)
+	mu.Lock()
+	defer mu.Unlock()
 	tagKey := c.setTagKey(tag)
 	//删除tagKey 对应的 key和值
 	keys := c.Get(ctx, tagKey)
