@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gogf/gf/v2/container/gvar"
+	"github.com/gogf/gf/v2/database/gredis"
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gcache"
@@ -45,6 +46,10 @@ type IGCache interface {
 type GfCache struct {
 	CachePrefix string //缓存前缀
 	cache       *gcache.Cache
+	// redisClient is set when the cache is backed by redis. When non-nil, the tag
+	// index is managed with Redis Set commands (SADD/SMEMBERS/SREM), which makes tag
+	// updates atomic and idempotent across multiple application instances.
+	redisClient *gredis.Redis
 	tagLocks    [128]sync.Mutex
 }
 
@@ -65,9 +70,17 @@ func New(cachePrefix string) *GfCache {
 func NewRedis(cachePrefix string, redisName ...string) *GfCache {
 	instanceKey := fmt.Sprintf("%s.%s", cachePrefix, "adapterRedis")
 	cache := instance.GetOrSetFuncLock(instanceKey, func() interface{} {
+		redis := g.Redis(redisName...)
+		if redis == nil {
+			panic(fmt.Sprintf(
+				`redis instance is not configured, please set config via gredis.SetConfig or check your config file (group: %v)`,
+				redisName,
+			))
+		}
 		cache := &GfCache{
 			CachePrefix: cachePrefix,
-			cache:       gcache.NewWithAdapter(gcache.NewAdapterRedis(g.Redis(redisName...))),
+			cache:       gcache.NewWithAdapter(gcache.NewAdapterRedis(redis)),
+			redisClient: redis,
 		}
 		return cache
 	})
@@ -75,10 +88,14 @@ func NewRedis(cachePrefix string, redisName ...string) *GfCache {
 }
 
 func NewDist(cachePrefix ...string) *GfCache {
-	instanceKey := fmt.Sprintf("%s.%s", cachePrefix, "adapterDist")
+	prefix := ""
+	if len(cachePrefix) > 0 {
+		prefix = cachePrefix[0]
+	}
+	instanceKey := fmt.Sprintf("%s.%s", prefix, "adapterDist")
 	cache := instance.GetOrSetFuncLock(instanceKey, func() interface{} {
 		cache := &GfCache{
-			CachePrefix: cachePrefix[0],
+			CachePrefix: prefix,
 			cache:       gcache.NewWithAdapter(adapter.NewDist()),
 		}
 		return cache
@@ -95,32 +112,53 @@ func (c *GfCache) getTagLock(tag string) *sync.Mutex {
 	return &c.tagLocks[hash%128]
 }
 
+// tagKey returns the full cache key of the tag index. The "tag_" prefix is a
+// reserved namespace: business keys should not start with "tag_".
+func (c *GfCache) tagKey(tag string) string {
+	return c.CachePrefix + c.setTagKey(tag)
+}
+
 // 设置tag缓存的keys
 func (c *GfCache) cacheTagKey(ctx context.Context, key interface{}, tag string) {
-	tagKey := c.CachePrefix + c.setTagKey(tag)
-	if tagKey != "" {
-		tagValue := []interface{}{key}
-		value, _ := c.cache.Get(ctx, tagKey)
-		if !value.IsNil() {
-			var keyValue []interface{}
-			//若是字符串
-			if kStr, ok := value.Val().(string); ok {
-				js, err := gjson.DecodeToJson(kStr)
-				if err != nil {
-					g.Log().Error(ctx, err)
-					return
-				}
-				keyValue = gconv.SliceAny(js.Interface())
-			} else {
-				keyValue = gconv.SliceAny(value)
+	tagKey := c.tagKey(tag)
+	if tagKey == "" {
+		return
+	}
+	// Redis 后端：tag 索引使用 Redis Set（SADD 原子且幂等），多实例并发写不会丢 key。
+	if c.redisClient != nil {
+		if _, err := c.redisClient.Do(ctx, "SADD", tagKey, key); err != nil {
+			g.Log().Error(ctx, err)
+		}
+		return
+	}
+	tagValue := []interface{}{key}
+	value, err := c.cache.Get(ctx, tagKey)
+	if err != nil {
+		g.Log().Error(ctx, err)
+		return
+	}
+	if value != nil && !value.IsNil() {
+		var keyValue []interface{}
+		switch v := value.Val().(type) {
+		case string, []byte:
+			// 内存适配器直接存列表；磁盘适配器存 JSON 编码后的列表。
+			js, err := gjson.DecodeToJson(v)
+			if err != nil {
+				g.Log().Error(ctx, err)
+				return
 			}
-			for _, v := range keyValue {
-				if !reflect.DeepEqual(key, v) {
-					tagValue = append(tagValue, v)
-				}
+			keyValue = gconv.SliceAny(js.Interface())
+		default:
+			keyValue = gconv.SliceAny(value.Val())
+		}
+		for _, v := range keyValue {
+			if !reflect.DeepEqual(key, v) {
+				tagValue = append(tagValue, v)
 			}
 		}
-		c.cache.Set(ctx, tagKey, tagValue, 0)
+	}
+	if err := c.cache.Set(ctx, tagKey, tagValue, 0); err != nil {
+		g.Log().Error(ctx, err)
 	}
 }
 
@@ -234,31 +272,55 @@ func (c *GfCache) Removes(ctx context.Context, keys []string) {
 	for k, v := range keys {
 		keysWithPrefix[k] = c.CachePrefix + v
 	}
-	c.cache.Remove(ctx, keysWithPrefix...)
+	if _, err := c.cache.Remove(ctx, keysWithPrefix...); err != nil {
+		g.Log().Error(ctx, err)
+	}
 }
 
-// RemoveByTag deletes the <tag> in the cache, and returns its value.
+// RemoveByTag deletes all cache entries that were registered under the given tag.
 func (c *GfCache) RemoveByTag(ctx context.Context, tag string) {
+	// Redis 后端：从 Set 读取成员并 SREM 删除。使用 SREM 而非 DEL，可保留
+	// SMEMBERS 读取之后被其他实例并发 SADD 的成员，避免产生孤儿数据。
+	if c.redisClient != nil {
+		tagKey := c.tagKey(tag)
+		if tagKey == "" {
+			return
+		}
+		v, err := c.redisClient.Do(ctx, "SMEMBERS", tagKey)
+		if err != nil {
+			g.Log().Error(ctx, err)
+			return
+		}
+		members := gconv.Strings(v.Val())
+		if len(members) > 0 {
+			c.Removes(ctx, members)
+			args := append([]interface{}{tagKey}, gconv.Interfaces(members)...)
+			if _, err := c.redisClient.Do(ctx, "SREM", args...); err != nil {
+				g.Log().Error(ctx, err)
+			}
+		}
+		return
+	}
 	mu := c.getTagLock(tag)
 	mu.Lock()
 	defer mu.Unlock()
 	tagKey := c.setTagKey(tag)
 	//删除tagKey 对应的 key和值
 	keys := c.Get(ctx, tagKey)
-	if !keys.IsNil() {
-		//如果是字符串
-		if kStr, ok := keys.Val().(string); ok {
-			js, err := gjson.DecodeToJson(kStr)
+	if keys != nil && !keys.IsNil() {
+		var ks []string
+		switch v := keys.Val().(type) {
+		case string, []byte:
+			js, err := gjson.DecodeToJson(v)
 			if err != nil {
 				g.Log().Error(ctx, err)
 				return
 			}
-			ks := gconv.SliceStr(js.Interface())
-			c.Removes(ctx, ks)
-		} else {
-			ks := gconv.SliceStr(keys.Val())
-			c.Removes(ctx, ks)
+			ks = gconv.SliceStr(js.Interface())
+		default:
+			ks = gconv.SliceStr(keys.Val())
 		}
+		c.Removes(ctx, ks)
 	}
 	c.Remove(ctx, tagKey)
 }

@@ -9,212 +9,188 @@ package test
 
 import (
 	"context"
-	"fmt"
+	"testing"
+	"time"
+
 	_ "github.com/gogf/gf/contrib/nosql/redis/v2"
 	"github.com/gogf/gf/v2/database/gredis"
 	"github.com/gogf/gf/v2/frame/g"
+	"github.com/gogf/gf/v2/test/gtest"
 	"github.com/tiger1103/gfast-cache/adapter"
 	"github.com/tiger1103/gfast-cache/cache"
-	"testing"
 )
 
-func TestBatch(t *testing.T) {
-	//t.Run("testMemory", testMemory)
-	t.Run("testRedis", testRedis)
-	//t.Run("testDist", testDist)
-	//t.Run("testDistData", testDistData)
-	//t.Run("testMemoryWithTag", testMemoryWithTag)
-	//t.Run("testRedisWithTag", testRedisWithTag)
-	//t.Run("testDistWithTag", testDistWithTag)
+func TestCacheMemory_Basic(t *testing.T) {
+	gtest.C(t, func(t *gtest.T) {
+		c := cache.New("t_mem_basic")
+		ctx := context.Background()
+
+		c.Set(ctx, "k1", "v1", 0)
+		t.Assert(c.Get(ctx, "k1").String(), "v1")
+		t.Assert(c.Contains(ctx, "k1"), true)
+		t.Assert(c.Contains(ctx, "nope"), false)
+
+		t.Assert(c.SetIfNotExist(ctx, "k2", "v2", 0, ""), true)
+		t.Assert(c.SetIfNotExist(ctx, "k2", "v2b", 0, ""), false)
+		t.Assert(c.Get(ctx, "k2").String(), "v2")
+
+		t.Assert(c.GetOrSet(ctx, "k3", "v3", 0, "").String(), "v3")
+		t.Assert(c.GetOrSet(ctx, "k3", "v3x", 0, "").String(), "v3")
+
+		t.Assert(c.GetOrSetFunc(ctx, "k4", func(ctx context.Context) (interface{}, error) {
+			return "v4", nil
+		}, 0, "").String(), "v4")
+		t.Assert(c.GetOrSetFuncLock(ctx, "k5", func(ctx context.Context) (interface{}, error) {
+			return "v5", nil
+		}, 0, "").String(), "v5")
+
+		t.Assert(c.Size(ctx), 5)
+		found := false
+		for _, k := range c.KeyStrings(ctx) {
+			if k == "t_mem_basick1" {
+				found = true
+			}
+		}
+		t.Assert(found, true)
+
+		c.Set(ctx, "km", g.Map{"name": "zhangsan", "age": 10}, 0)
+		t.Assert(c.Get(ctx, "km").Map()["name"], "zhangsan")
+
+		t.Assert(c.Remove(ctx, "k1").String(), "v1")
+		c.Removes(ctx, []string{"k2", "k3"})
+		t.Assert(c.Contains(ctx, "k2"), false)
+		t.Assert(c.Contains(ctx, "k3"), false)
+	})
 }
 
-// 缓存使用内存测试
-func testMemory(t *testing.T) {
-	c := cache.New("prefix")
-	ctx := context.Background()
-	// tag can batch Management Cache
-	c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0)
-	v := c.Get(ctx, "person")
-	fmt.Println(v)
-	//按键删除
-	c.Remove(ctx, "person")
+func TestCacheMemory_Tag(t *testing.T) {
+	gtest.C(t, func(t *gtest.T) {
+		c := cache.New("t_mem_tag")
+		ctx := context.Background()
+
+		c.Set(ctx, "person01", "p1", 0, "tag_person")
+		c.Set(ctx, "person02", "p2", 0, "tag_person")
+		c.Set(ctx, "family01", "f1", 0, "tag_family")
+		t.Assert(c.Get(ctx, "person01").String(), "p1")
+		t.Assert(c.Get(ctx, "family01").String(), "f1")
+
+		c.RemoveByTag(ctx, "tag_person")
+		t.Assert(c.Contains(ctx, "person01"), false)
+		t.Assert(c.Contains(ctx, "person02"), false)
+		t.Assert(c.Contains(ctx, "family01"), true)
+
+		c.Set(ctx, "person03", "p3", 0, "tag_person")
+		c.Set(ctx, "family02", "f2", 0, "tag_family")
+		c.RemoveByTags(ctx, []string{"tag_person", "tag_family"})
+		t.Assert(c.Contains(ctx, "person03"), false)
+		t.Assert(c.Contains(ctx, "family02"), false)
+	})
 }
 
-// 缓存使用redis测试
-func testRedis(t *testing.T) {
-	config := gredis.Config{
-		Address: "127.0.0.1:6379",
-		Db:      1,
-	}
-	ctx := context.Background()
-	gredis.SetConfig(&config)
-	c := cache.NewRedis("prefix")
-	// tag can batch Management Cache
-	c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0)
-	v := c.Get(ctx, "person")
-	fmt.Println(v)
-	//按键删除
-	c.Remove(ctx, "person")
+// SetIfNotExist / GetOrSet / GetOrSetFunc with tag must register the key into the tag.
+func TestCacheMemory_TagViaOtherApis(t *testing.T) {
+	gtest.C(t, func(t *gtest.T) {
+		c := cache.New("t_mem_tag_api")
+		ctx := context.Background()
+
+		c.SetIfNotExist(ctx, "k1", "v1", 0, "tagA")
+		c.GetOrSet(ctx, "k2", "v2", 0, "tagA")
+		c.GetOrSetFunc(ctx, "k3", func(ctx context.Context) (interface{}, error) {
+			return "v3", nil
+		}, 0, "tagA")
+
+		t.Assert(c.Get(ctx, "k1").String(), "v1")
+		c.RemoveByTag(ctx, "tagA")
+		t.Assert(c.Contains(ctx, "k1"), false)
+		t.Assert(c.Contains(ctx, "k2"), false)
+		t.Assert(c.Contains(ctx, "k3"), false)
+	})
 }
 
-// 磁盘缓存测试
-func testDist(t *testing.T) {
-	config := adapter.Config{
-		Dir: "./distDb",
-	}
-	ctx := context.Background()
-	adapter.SetConfig(&config)
-	c := cache.NewDist("prefix")
-	// tag can batch Management Cache
-	c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0)
-	c.Set(ctx, "hello", "word", 0)
-	v := c.Get(ctx, "person")
-	fmt.Println(v)
-	//按键删除
-	val := c.Remove(ctx, "person")
-	fmt.Println("RemoveVal is :", val)
+func TestCacheMemory_Expire(t *testing.T) {
+	gtest.C(t, func(t *gtest.T) {
+		c := cache.New("t_mem_expire")
+		ctx := context.Background()
+		c.Set(ctx, "k", "v", 100*time.Millisecond)
+		t.Assert(c.Get(ctx, "k").String(), "v")
+		time.Sleep(200 * time.Millisecond)
+		t.Assert(c.Contains(ctx, "k"), false)
+		t.Assert(c.Get(ctx, "k") == nil, true)
+	})
 }
 
-func testDistData(t *testing.T) {
-	type A struct {
-		Name string `json:"name"`
-		Age  int    `json:"age"`
-	}
-	a := &A{
-		Name: "张三",
-		Age:  30,
-	}
-	config := adapter.Config{
-		Dir: "./distDb",
-	}
-	ctx := context.Background()
-	adapter.SetConfig(&config)
-	c := cache.NewDist("prefix")
-	//c.Set(ctx, "person", g.Map{"name": "zhangsan", "age": 10}, 0)
-	//c.Set(ctx, "YXH", "我明天去", 0)
-	c.Set(ctx, "aaa", a, 0)
-	c.Set(ctx, "bbb", true, 0)
-	//c.Set(ctx, "woooooooooooooo", "chinaaaaaaaaaaaaaaaa", 10*time.Second)
-	fmt.Printf("数据库中有%d个元素\n", c.Size(ctx))
-	ccc := c.Get(ctx, "aaa")
-
-	fmt.Println("ccccccccccccccc", ccc)
-	fmt.Println("bbbbbbbbbbbbbb", c.Get(ctx, "bbb"))
-
-	var b *A
-	err := ccc.Struct(&b)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("获取到的AAAAAAAAAAAA", b.Name, b.Age)
-	/*mp := c.Data(ctx)
-	for k, v := range mp {
-		fmt.Printf("得到的结果：%s----%s\n", gconv.String(k), gconv.String(v))
-	}*/
-	/*keys := c.Keys(ctx)
-	for _, v := range keys {
-		fmt.Println("key:", gconv.String(v))
-	}
-	values := c.Values(ctx)
-	for _, v := range values {
-		fmt.Println("value:", gconv.String(v))
-	}*/
+func TestCacheMemory_Singleton(t *testing.T) {
+	gtest.C(t, func(t *gtest.T) {
+		a := cache.New("t_singleton")
+		b := cache.New("t_singleton")
+		c := cache.New("t_singleton_other")
+		t.Assert(a == b, true)
+		t.Assert(a == c, false)
+	})
 }
 
-// 缓存标签使用内存测试
-func testMemoryWithTag(t *testing.T) {
-	c := cache.New("prefix")
+// Regression: RemoveByTag on the Dist backend must not leave orphan keys when some
+// data keys already expired (previously the whole Remove batch failed on any missing key).
+func TestCacheDist_Tag(t *testing.T) {
 	ctx := context.Background()
-	// tag can batch Management Cache
+	adapter.SetConfig(&adapter.Config{Dir: t.TempDir()})
+	c := cache.NewDist("t_dist_tag")
+	t.Cleanup(func() {
+		d := adapter.New()
+		_ = d.Close(ctx)
+	})
 
-	c.Set(ctx, "person01", g.Map{"name": "zhangsan", "age": 10}, 0, "tag_person")
-	c.Set(ctx, "family01", g.Map{"address": "Cai Yun street"}, 0, "tag_family")
-	c.Set(ctx, "work01", g.Map{"unit": "qixun"}, 0, "tag_work")
+	c.Set(ctx, "d1", "v1", 50*time.Millisecond, "dt")
+	c.Set(ctx, "d2", "v2", 50*time.Millisecond, "dt")
+	c.Set(ctx, "d3", "v3", 0, "dt")
+	if v := c.Get(ctx, "d3"); v == nil || v.String() != "v3" {
+		t.Fatalf("unexpected d3 value: %v", v)
+	}
 
-	c.Set(ctx, "person02", g.Map{"name": "zhangsan", "age": 10}, 0, "tag_person")
-	c.Set(ctx, "family02", g.Map{"address": "Cai Yun street"}, 0, "tag_family")
-	c.Set(ctx, "work02", g.Map{"unit": "qixun"}, 0, "tag_work")
+	time.Sleep(120 * time.Millisecond)
+	if c.Contains(ctx, "d1") {
+		t.Fatal("d1 should have expired")
+	}
 
-	p1 := c.Get(ctx, "person01")
-	p2 := c.Get(ctx, "person02")
-	fmt.Println(p1, p2)
-	// 缓存标签在读取缓存数据时和直接缓存读取一样，差别只在删除时可以批量删除
-	// 比如要删除 person01和person02两组对应的缓存
-	// 不使用tag时
-	c.Remove(ctx, "person01")
-	c.Remove(ctx, "person02")
-	//或
-	c.Removes(ctx, []string{"person01", "person02"})
-	// 使用缓存标签
-	c.RemoveByTag(ctx, "tag_person") //直接就可以删除该标签下的缓存("person01","person02")
-	// 甚至可以批量删除标签
-	c.RemoveByTags(ctx, []string{"tag_person", "tag_family"}) // 同时删除多组标签下的数据
+	c.RemoveByTag(ctx, "dt")
+	if c.Contains(ctx, "d3") {
+		t.Fatal("d3 should have been removed by RemoveByTag")
+	}
+	if n := c.Size(ctx); n != 0 {
+		t.Fatalf("expected 0 remaining keys, got %d", n)
+	}
 }
 
-// 缓存使用redis测试
-func testRedisWithTag(t *testing.T) {
-	config := gredis.Config{
-		Address: "127.0.0.1:6379",
-		Db:      1,
-	}
+// Redis tests skip gracefully when no local redis is available.
+// The CI workflow starts a redis service, so this test is exercised there.
+func TestCacheRedis_BasicAndTag(t *testing.T) {
 	ctx := context.Background()
-	gredis.SetConfig(&config)
-	c := cache.NewRedis("prefix")
-	// tag can batch Management Cache
-
-	c.Set(ctx, "person01", g.Map{"name": "zhangsan", "age": 10}, 0, "tag_person")
-	c.Set(ctx, "family01", g.Map{"address": "Cai Yun street"}, 0, "tag_family")
-	c.Set(ctx, "work01", g.Map{"unit": "qixun"}, 0, "tag_work")
-
-	c.Set(ctx, "person02", g.Map{"name": "zhangsan", "age": 10}, 0, "tag_person")
-	c.Set(ctx, "family02", g.Map{"address": "Cai Yun street"}, 0, "tag_family")
-	c.Set(ctx, "work02", g.Map{"unit": "qixun"}, 0, "tag_work")
-
-	p1 := c.Get(ctx, "person01")
-	p2 := c.Get(ctx, "person02")
-	fmt.Println(p1, p2)
-	// 缓存标签在读取缓存数据时和直接缓存读取一样，差别只在删除时可以批量删除
-	// 比如要删除 person01和person02两组对应的缓存
-	// 不使用tag时
-	c.Remove(ctx, "person01")
-	c.Remove(ctx, "person02")
-	//或
-	c.Removes(ctx, []string{"person01", "person02"})
-	// 使用缓存标签
-	c.RemoveByTag(ctx, "tag_person") //直接就可以删除该标签下的缓存("person01","person02")
-	// 甚至可以批量删除标签
-	c.RemoveByTags(ctx, []string{"tag_person", "tag_family"}) // 同时删除多组标签下的数据
-}
-
-// 磁盘缓存标签测试
-func testDistWithTag(t *testing.T) {
-	config := adapter.Config{
-		Dir: "./distDb",
+	const redisGroup = "gfast-cache-test"
+	gredis.SetConfig(&gredis.Config{Address: "127.0.0.1:6379", Db: 1}, redisGroup)
+	r := g.Redis(redisGroup)
+	if r == nil {
+		t.Skip("redis not configured")
 	}
-	ctx := context.Background()
-	adapter.SetConfig(&config)
-	c := cache.NewRedis("prefix")
-	// tag can batch Management Cache
-	c.Set(ctx, "person01", g.Map{"name": "zhangsan", "age": 10}, 0, "tag_person")
-	c.Set(ctx, "family01", g.Map{"address": "Cai Yun street"}, 0, "tag_family")
-	c.Set(ctx, "work01", g.Map{"unit": "qixun"}, 0, "tag_work")
+	if _, err := r.Do(ctx, "PING"); err != nil {
+		t.Skipf("redis unavailable: %v", err)
+	}
 
-	c.Set(ctx, "person02", g.Map{"name": "zhangsan", "age": 10}, 0, "tag_person")
-	c.Set(ctx, "family02", g.Map{"address": "Cai Yun street"}, 0, "tag_family")
-	c.Set(ctx, "work02", g.Map{"unit": "qixun"}, 0, "tag_work")
+	const prefix = "t_redis"
+	c := cache.NewRedis(prefix, redisGroup)
+	t.Cleanup(func() {
+		_, _ = r.Do(ctx, "DEL", prefix+"k1", prefix+"k2", prefix+"tag_t1")
+	})
 
-	p1 := c.Get(ctx, "person01")
-	p2 := c.Get(ctx, "person02")
-	fmt.Println(p1, p2)
-	// 缓存标签在读取缓存数据时和直接缓存读取一样，差别只在删除时可以批量删除
-	// 比如要删除 person01和person02两组对应的缓存
-	// 不使用tag时
-	c.Remove(ctx, "person01")
-	c.Remove(ctx, "person02")
-	//或
-	c.Removes(ctx, []string{"person01", "person02"})
-	// 使用缓存标签
-	c.RemoveByTag(ctx, "tag_person") //直接就可以删除该标签下的缓存("person01","person02")
-	// 甚至可以批量删除标签
-	c.RemoveByTags(ctx, []string{"tag_person", "tag_family"}) // 同时删除多组标签下的数据
+	c.Set(ctx, "k1", "v1", 0, "t1")
+	c.Set(ctx, "k2", "v2", 0, "t1")
+	if v := c.Get(ctx, "k1"); v == nil || v.String() != "v1" {
+		t.Fatalf("unexpected k1 value: %v", v)
+	}
+	c.RemoveByTag(ctx, "t1")
+	if c.Contains(ctx, "k1") {
+		t.Fatal("k1 should have been removed by RemoveByTag")
+	}
+	if c.Contains(ctx, "k2") {
+		t.Fatal("k2 should have been removed by RemoveByTag")
+	}
 }

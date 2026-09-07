@@ -10,35 +10,30 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
+	"sync"
+	"time"
+
 	badger "github.com/dgraph-io/badger/v4"
 	"github.com/gogf/gf/v2/container/gmap"
 	"github.com/gogf/gf/v2/container/gvar"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gcache"
-	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/gogf/gf/v2/util/gconv"
 	"github.com/tiger1103/gfast-cache/instance"
-	"reflect"
-	"sync"
-	"time"
 )
 
 const (
 	DefaultGroupName = "default" // Default configuration group name.
 	DistCacheName    = "distCache"
-	// defaultMaxExpire is the default expire time for no expiring items.
-	// It equals to math.MaxInt64/1000000.
-	defaultMaxExpire time.Duration = 9223372036854
 )
 
 var (
 	// Configuration groups.
 	localConfigMap = gmap.NewStrAnyMap(true)
-	ctx            = context.Background()
 )
-
-type distAdapter = gcache.Adapter
 
 // Config 磁盘缓存配置
 type Config struct {
@@ -56,6 +51,9 @@ func SetConfig(config *Config, name ...string) {
 	g.Log().Printf(context.TODO(), `SetConfig for group "%s": %+v`, group, config)
 }
 
+// New creates or returns a Dist adapter instance of given group.
+// The group configuration must be set via SetConfig before calling New,
+// otherwise it panics.
 func New(name ...string) *Dist {
 	var (
 		group  = DefaultGroupName
@@ -99,6 +97,7 @@ func New(name ...string) *Dist {
 	return nil
 }
 
+// NewDist creates a Dist adapter with the default group.
 func NewDist() *Dist {
 	return New()
 }
@@ -109,19 +108,32 @@ type Dist struct {
 	mu     sync.RWMutex
 }
 
+// setLocked writes `key`-`value` pair into badger. The caller must hold d.mu (write lock).
+// Per the gcache.Adapter contract, a negative duration or nil value deletes the key.
+// A zero duration stores the entry without any TTL, so permanent entries have
+// ExpiresAt == 0, which GetExpire/UpdateExpire rely on to return 0.
+func (d *Dist) setLocked(ctx context.Context, key interface{}, value interface{}, duration time.Duration) error {
+	if duration < 0 || value == nil {
+		_, err := d.Remove(ctx, key)
+		return err
+	}
+	return d.db.Update(func(txn *badger.Txn) error {
+		value, err := d.convertOptionToArgs(value)
+		if err != nil {
+			return err
+		}
+		e := badger.NewEntry(gconv.Bytes(key), gconv.Bytes(value))
+		if duration > 0 {
+			e = e.WithTTL(duration)
+		}
+		return txn.SetEntry(e)
+	})
+}
+
 func (d *Dist) Set(ctx context.Context, key interface{}, value interface{}, duration time.Duration) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	duration = d.getInternalExpire(duration)
-	err := d.db.Update(func(txn *badger.Txn) (err error) {
-		value, err = d.convertOptionToArgs(value)
-		if err != nil {
-			return
-		}
-		e := badger.NewEntry(gconv.Bytes(key), gconv.Bytes(value)).WithTTL(duration)
-		return txn.SetEntry(e)
-	})
-	return err
+	return d.setLocked(ctx, key, value, duration)
 }
 
 func (d *Dist) SetMap(ctx context.Context, data map[interface{}]interface{}, duration time.Duration) error {
@@ -135,6 +147,8 @@ func (d *Dist) SetMap(ctx context.Context, data map[interface{}]interface{}, dur
 }
 
 func (d *Dist) SetIfNotExist(ctx context.Context, key interface{}, value interface{}, duration time.Duration) (ok bool, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	ok, err = d.Contains(ctx, key)
 	if err != nil {
 		return false, err
@@ -142,9 +156,9 @@ func (d *Dist) SetIfNotExist(ctx context.Context, key interface{}, value interfa
 	if ok {
 		return false, nil
 	}
-	err = d.Set(ctx, key, value, duration)
+	err = d.setLocked(ctx, key, value, duration)
 	if err != nil {
-		return
+		return false, err
 	}
 	return true, nil
 }
@@ -163,70 +177,113 @@ func (d *Dist) SetIfNotExistFunc(ctx context.Context, key interface{}, f gcache.
 	}
 	err = d.Set(ctx, key, value, duration)
 	if err != nil {
-		return
+		return false, err
 	}
 	return true, nil
 }
 
+// SetIfNotExistFuncLock executes function `f` within the writing mutex lock for concurrent safety.
 func (d *Dist) SetIfNotExistFuncLock(ctx context.Context, key interface{}, f gcache.Func, duration time.Duration) (ok bool, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	ok, err = d.SetIfNotExistFunc(ctx, key, f, duration)
-	return
+	ok, err = d.Contains(ctx, key)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		return false, nil
+	}
+	value, err := f(ctx)
+	if err != nil {
+		return false, err
+	}
+	err = d.setLocked(ctx, key, value, duration)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (d *Dist) Get(ctx context.Context, key interface{}) (value *gvar.Var, err error) {
 	err = d.db.View(func(txn *badger.Txn) error {
 		item, e := txn.Get(gconv.Bytes(key))
 		if e != nil {
-			g.Log().Error(ctx, e)
-			return nil
-		}
-		if item != nil {
-			err = item.Value(func(val []byte) error {
-				value = gvar.New(val)
+			if errors.Is(e, badger.ErrKeyNotFound) {
+				// A cache miss is not an error.
 				return nil
-			})
+			}
+			return e
 		}
-		return err
+		return item.Value(func(val []byte) error {
+			// Copy the value: the given slice is only valid within the callback.
+			value = gvar.New(append([]byte(nil), val...))
+			return nil
+		})
 	})
 	return
 }
 
 func (d *Dist) GetOrSet(ctx context.Context, key interface{}, value interface{}, duration time.Duration) (result *gvar.Var, err error) {
-	result, _ = d.Get(ctx, key)
-	if !result.IsEmpty() {
-		return
+	result, err = d.Get(ctx, key)
+	if err != nil {
+		return nil, err
 	}
-	result = gvar.New(value)
-	err = d.Set(ctx, key, value, duration)
-	return
+	if result != nil && !result.IsEmpty() {
+		return result, nil
+	}
+	if err = d.Set(ctx, key, value, duration); err != nil {
+		return nil, err
+	}
+	return gvar.New(value), nil
 }
 
 func (d *Dist) GetOrSetFunc(ctx context.Context, key interface{}, f gcache.Func, duration time.Duration) (result *gvar.Var, err error) {
-	result, _ = d.Get(ctx, key)
-	if !result.IsEmpty() {
-		return
+	result, err = d.Get(ctx, key)
+	if err != nil {
+		return nil, err
 	}
-	var value interface{}
-	value, err = f(ctx)
-	result = gvar.New(value)
-	err = d.Set(ctx, key, value, duration)
-	return
+	if result != nil && !result.IsEmpty() {
+		return result, nil
+	}
+	value, err := f(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err = d.Set(ctx, key, value, duration); err != nil {
+		return nil, err
+	}
+	return gvar.New(value), nil
 }
 
+// GetOrSetFuncLock retrieves the value of `key`, or executes function `f` within the
+// writing mutex lock and sets `key` with its result. This prevents cache penetration
+// under concurrent access: `f` runs exactly once.
 func (d *Dist) GetOrSetFuncLock(ctx context.Context, key interface{}, f gcache.Func, duration time.Duration) (result *gvar.Var, err error) {
-	return d.GetOrSetFunc(ctx, key, f, duration)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	result, err = d.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if result != nil && !result.IsEmpty() {
+		return result, nil
+	}
+	value, err := f(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err = d.setLocked(ctx, key, value, duration); err != nil {
+		return nil, err
+	}
+	return gvar.New(value), nil
 }
 
 func (d *Dist) Contains(ctx context.Context, key interface{}) (b bool, err error) {
-	var val *gvar.Var
-	val, err = d.Get(ctx, key)
+	val, err := d.Get(ctx, key)
 	if err != nil {
-		return
+		return false, err
 	}
-	b = !val.IsEmpty()
-	return
+	return val != nil, nil
 }
 
 func (d *Dist) Size(ctx context.Context) (size int, err error) {
@@ -245,23 +302,20 @@ func (d *Dist) Size(ctx context.Context) (size int, err error) {
 }
 
 func (d *Dist) Data(ctx context.Context) (data map[interface{}]interface{}, err error) {
-	data = make(map[interface{}]interface{}, 1000)
+	data = make(map[interface{}]interface{})
 	err = d.db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
 		it := txn.NewIterator(opts)
 		defer it.Close()
 		for it.Rewind(); it.Valid(); it.Next() {
 			item := it.Item()
-			k := item.Key()
-			err = item.Value(func(v []byte) error {
-				fmt.Printf("键值对的值分别是:%s-%s\n", k, v)
-				data[gconv.String(k)] = v
-				return nil
-			})
-			if err != nil {
-				g.Log().Error(ctx, err)
-				return err
+			// KeyCopy returns a copy of the key, safe to use after the txn.
+			k := item.KeyCopy(nil)
+			val, e := item.ValueCopy(nil)
+			if e != nil {
+				return e
 			}
+			data[gconv.String(k)] = val
 		}
 		return nil
 	})
@@ -277,8 +331,8 @@ func (d *Dist) Keys(ctx context.Context) (keys []interface{}, err error) {
 		defer it.Close()
 		for it.Rewind(); it.Valid(); it.Next() {
 			item := it.Item()
-			k := item.Key()
-			keys = append(keys, k)
+			// KeyCopy: item.Key() is only valid until the next iterator step.
+			keys = append(keys, item.KeyCopy(nil))
 		}
 		return nil
 	})
@@ -294,7 +348,8 @@ func (d *Dist) Values(ctx context.Context) (values []interface{}, err error) {
 		for it.Rewind(); it.Valid(); it.Next() {
 			item := it.Item()
 			err = item.Value(func(v []byte) error {
-				values = append(values, v)
+				// Copy the value: the given slice is only valid within the callback.
+				values = append(values, append([]byte(nil), v...))
 				return nil
 			})
 			if err != nil {
@@ -307,73 +362,106 @@ func (d *Dist) Values(ctx context.Context) (values []interface{}, err error) {
 }
 
 func (d *Dist) Update(ctx context.Context, key interface{}, value interface{}) (oldValue *gvar.Var, exist bool, err error) {
-	oldValue, _ = d.Get(ctx, key)
-	if !oldValue.IsEmpty() {
-		exist = true
-	}
-	var duration time.Duration
-	duration, err = d.GetExpire(ctx, key)
+	duration, err := d.GetExpire(ctx, key)
 	if err != nil {
-		return
+		return nil, false, err
+	}
+	if duration == -1 {
+		// The key does not exist or has expired: do nothing.
+		return nil, false, nil
+	}
+	oldValue, err = d.Get(ctx, key)
+	if err != nil {
+		return nil, false, err
+	}
+	if value == nil {
+		_, err = d.Remove(ctx, key)
+		return oldValue, true, err
 	}
 	err = d.Set(ctx, key, value, duration)
-	return
+	return oldValue, true, err
 }
 
 func (d *Dist) UpdateExpire(ctx context.Context, key interface{}, duration time.Duration) (oldDuration time.Duration, err error) {
 	err = d.db.Update(func(txn *badger.Txn) error {
-		// 获取键的元数据
 		item, err := txn.Get(gconv.Bytes(key))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				// The key does not exist: returns -1 and does nothing.
+				oldDuration = -1
+				return nil
+			}
+			return err
+		}
+		oldDuration = d.expireRemain(item.ExpiresAt())
+		if duration < 0 {
+			// Negative duration deletes the key.
+			return txn.Delete(gconv.Bytes(key))
+		}
+		val, err := item.ValueCopy(nil)
 		if err != nil {
 			return err
 		}
-		expire := gtime.NewFromTimeStamp(gconv.Int64(item.ExpiresAt()))
-		now := gtime.Now()
-		oldDuration = gconv.Duration(expire.Sub(now))
-		err = item.Value(func(val []byte) error {
-			duration = d.getInternalExpire(duration)
-			e := badger.NewEntry(gconv.Bytes(key), val).WithTTL(duration)
-			err = txn.SetEntry(e)
-			return err
-		})
-		return err
+		if duration == 0 {
+			// Remove the TTL: store a new entry without expiration.
+			return txn.SetEntry(badger.NewEntry(gconv.Bytes(key), val))
+		}
+		return txn.SetEntry(badger.NewEntry(gconv.Bytes(key), val).WithTTL(duration))
 	})
 	return
 }
 
+// GetExpire returns the remaining lifetime of `key`.
+// It returns 0 if the key never expires, and -1 if the key does not exist.
 func (d *Dist) GetExpire(ctx context.Context, key interface{}) (duration time.Duration, err error) {
 	err = d.db.View(func(txn *badger.Txn) error {
-		// 获取键的元数据
 		item, err := txn.Get(gconv.Bytes(key))
 		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				duration = -1
+				return nil
+			}
 			return err
 		}
-		expire := gtime.NewFromTimeStamp(gconv.Int64(item.ExpiresAt()))
-		now := gtime.Now()
-		duration = gconv.Duration(expire.Sub(now))
+		duration = d.expireRemain(item.ExpiresAt())
 		return nil
 	})
 	return
 }
 
+// expireRemain returns the remaining lifetime of an entry with the given unix-seconds
+// expiration timestamp. It returns 0 if the entry never expires (timestamp 0) or
+// has already expired.
+func (d *Dist) expireRemain(expiresAt uint64) time.Duration {
+	if expiresAt == 0 {
+		return 0
+	}
+	remain := time.Until(time.Unix(int64(expiresAt), 0))
+	if remain < 0 {
+		return 0
+	}
+	return remain
+}
+
 func (d *Dist) Remove(ctx context.Context, keys ...interface{}) (lastValue *gvar.Var, err error) {
 	err = d.db.Update(func(txn *badger.Txn) error {
-		for index, key := range keys {
-			if index == len(keys)-1 {
-				item, err := txn.Get(gconv.Bytes(key))
-				if err != nil {
-					return err
-				}
-				err = item.Value(func(val []byte) error {
-					lastValue = gvar.New(val)
-					return nil
-				})
-				if err != nil {
-					return err
-				}
-			}
-			err = txn.Delete(gconv.Bytes(key))
+		for _, key := range keys {
+			item, err := txn.Get(gconv.Bytes(key))
 			if err != nil {
+				if errors.Is(err, badger.ErrKeyNotFound) {
+					// Missing keys are skipped and never abort the batch.
+					continue
+				}
+				return err
+			}
+			err = item.Value(func(val []byte) error {
+				lastValue = gvar.New(append([]byte(nil), val...))
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			if err = txn.Delete(gconv.Bytes(key)); err != nil {
 				return err
 			}
 		}
@@ -390,14 +478,6 @@ func (d *Dist) Clear(ctx context.Context) error {
 func (d *Dist) Close(ctx context.Context) error {
 	err := d.db.Close()
 	return err
-}
-
-// getInternalExpire converts and returns the expiration time with given expired duration in milliseconds.
-func (d *Dist) getInternalExpire(duration time.Duration) time.Duration {
-	if duration == 0 {
-		return defaultMaxExpire * time.Millisecond
-	}
-	return duration
 }
 
 func (d *Dist) convertOptionToArgs(option interface{}) (result interface{}, err error) {

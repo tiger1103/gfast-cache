@@ -1,20 +1,24 @@
-.buildpath
-.hgignore.swp
-.project
-.orig
-.swp
+# IDE
 .idea/
+.vscode/
 .settings/
-.vscode/
-vendor/
-composer.lock
-gitpush.sh
-pkg/
+*.iml
+
+# 构建产物
 bin/
+pkg/
 cbuild
-**/.DS_Store
-.vscode/
-test/distDb
 main
 output/
 manifest/output/
+*.test
+coverage.out
+*.prof
+
+# 运行时 / 本地
+test/distDb
+vendor/
+gitpush.sh
+**/.DS_Store
+.orig
+.swp
